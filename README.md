@@ -1,8 +1,26 @@
 # Masters/Besties Open Play
 
-A pickleball open-play match manager: fair 2v2 matchmaking, court and player
-management, waiting queue, match history, and stats. Data is saved to your
-browser's local storage.
+A pickleball open-play match manager: fair 2v2 matchmaking, a persistent
+player database, manual match progression, court management with automatic
+redistribution, session history, and a full stats/queue view. Data is saved
+to your browser's local storage, and the app installs as a home-screen PWA.
+
+### What's new in this version
+- **Player database** — every player you add is saved permanently; pull them
+  into future sessions from Players → "Add from saved" instead of retyping names.
+- **Check In All** — one tap to check in every registered player.
+- **Manual match progression** — when a match ends, the next matchup is
+  proposed but won't start (or count toward the timer/stats) until you tap
+  **Start match**.
+- **Court redistribution** — disabling or removing a court mid-match sends
+  those four players back to the queue and reshuffles proposed matches
+  across the remaining courts automatically.
+- **Session history** — every session you end is archived (Settings →
+  Session history) with a read-only view of its final matches and stats.
+- **Smarter scheduler** — priority order is now fewest games played, then
+  longest wait, with skill-balance and back-to-back-match penalties layered on.
+- **Toasts, confirm dialogs, loading splash** — for a more production feel.
+- **PWA** — installable to a phone/tablet home screen, works offline as a shell.
 
 ## Run it locally
 

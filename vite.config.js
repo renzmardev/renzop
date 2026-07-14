@@ -1,9 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// If you deploy to GitHub Pages at https://<user>.github.io/<repo>/,
-// set base to "/<repo>/". For a custom domain or Vercel/Netlify, leave it as "/".
+// Vercel/Netlify/custom domain: keep base as "/".
+// GitHub Pages at https://<user>.github.io/<repo>/: set base to "/<repo>/" instead.
 export default defineConfig({
   plugins: [react()],
-  base: "/masters-besties-open-play/",
+  base: "/",
 });
