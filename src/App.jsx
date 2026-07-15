@@ -58,7 +58,6 @@ const persist = {
 --------------------------------------------------------------------------- */
 import { Scheduler } from "./scheduler.js";
 
-
 /* ---------------------------------------------------------------------------
    TYPES (documented via JSDoc since this runtime executes plain JS/JSX)
    Player: { id, name, gender?, skill, status, gamesPlayed, wins, losses,
@@ -432,6 +431,7 @@ function archiveReducer(archiveState, action) {
     case "LOAD": return action.payload || [];
     case "ARCHIVE": return [action.entry, ...archiveState];
     case "REMOVE": return archiveState.filter(s => s.id !== action.id);
+    case "CLEAR_ALL": return [];
     default: return archiveState;
   }
 }
@@ -1212,6 +1212,13 @@ function HistoryPage() {
 }
 
 /* ---------------------------------------------------------------------------
+   ANALYTICS ENGINE — aggregates stats for a player by name across the live
+   session and every archived session (player identity is the saved name,
+   since session-local player ids are randomly generated per session).
+--------------------------------------------------------------------------- */
+import { formatDuration, computePlayerAnalytics } from "./analytics.js";
+
+/* ---------------------------------------------------------------------------
    STATISTICS
 --------------------------------------------------------------------------- */
 function StatsTable({ rows }) {
@@ -1245,11 +1252,178 @@ function StatsTable({ rows }) {
   );
 }
 
+function PlayerAnalyticsDialog({ p, onClose }) {
+  const t = useTheme();
+  const courtEntries = Object.entries(p.courtCounts).sort((a, b) => b[1] - a[1]);
+  const Stat = ({ label, value }) => (
+    <div className={`rounded-xl px-3 py-2.5 ${t.panelSoft}`}>
+      <div className={`text-[11px] ${t.subtext}`}>{label}</div>
+      <div className="op-score text-2xl leading-tight">{value}</div>
+    </div>
+  );
+  return (
+    <Modal title={p.name} icon={BarChart3} onClose={onClose} maxWidth="max-w-lg">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <Stat label="Matches played" value={p.matchesPlayed} />
+        <Stat label="Wins" value={p.wins} />
+        <Stat label="Losses" value={p.losses} />
+        <Stat label="Win %" value={`${p.winPct}%`} />
+        <Stat label="Points scored" value={p.pointsScored} />
+        <Stat label="Points allowed" value={p.pointsAllowed} />
+        <Stat label="Point differential" value={p.pointDiff >= 0 ? `+${p.pointDiff}` : p.pointDiff} />
+        <Stat label="Avg points / match" value={p.avgPoints || "—"} />
+        <Stat label="Total playing time" value={formatDuration(p.totalDurationMs)} />
+        <Stat label="Avg match duration" value={formatDuration(p.avgDurationMs)} />
+        <Stat label="Longest match" value={formatDuration(p.longestMatchMs)} />
+        <Stat label="Current win streak" value={p.currentWinStreak} />
+        <Stat label="Longest win streak" value={p.longestWinStreak} />
+        <Stat label="Current losing streak" value={p.currentLosingStreak} />
+        <Stat label="Sessions participated" value={p.sessionsParticipated} />
+        <Stat label="Avg wait between matches" value={p.avgWaitMs != null ? formatDuration(p.avgWaitMs) : "—"} />
+      </div>
+      <div className="mt-3">
+        <div className={`text-xs font-medium mb-1.5 ${t.subtext}`}>Times played per court</div>
+        {courtEntries.length === 0 ? (
+          <div className={`text-sm ${t.subtext}`}>No matches recorded yet.</div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {courtEntries.map(([court, count]) => (
+              <Badge key={court} tone="blue">{court} · {count}</Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+const LEADERBOARD_COLUMNS = [
+  { key: "rank", label: "Rank" },
+  { key: "name", label: "Player" },
+  { key: "winPct", label: "Win %" },
+  { key: "wins", label: "Wins" },
+  { key: "losses", label: "Losses" },
+  { key: "matchesPlayed", label: "Matches" },
+  { key: "pointsScored", label: "Points" },
+  { key: "pointDiff", label: "+/-" },
+  { key: "currentWinStreak", label: "Streak" },
+];
+const PAGE_SIZE = 10;
+const MEDAL = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
+function Leaderboard() {
+  const { state, archive } = useStore();
+  const t = useTheme();
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState("rank");
+  const [sortDir, setSortDir] = useState("asc");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState(null);
+
+  const analytics = useMemo(() => computePlayerAnalytics(state, archive), [state, archive]);
+
+  // Canonical rank order (the tiebreak chain from the spec) — independent
+  // of whatever column the table is currently sorted/displayed by.
+  const ranked = useMemo(() => {
+    const arr = [...analytics].sort((a, b) =>
+      b.winPct - a.winPct || b.wins - a.wins || a.losses - b.losses ||
+      b.pointDiff - a.pointDiff || b.matchesPlayed - a.matchesPlayed);
+    return arr.map((p, i) => ({ ...p, rank: i + 1 }));
+  }, [analytics]);
+
+  const filtered = useMemo(
+    () => ranked.filter(p => p.name.toLowerCase().includes(query.toLowerCase())),
+    [ranked, query]
+  );
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    const dir = sortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      if (sortKey === "name") return a.name.localeCompare(b.name) * dir;
+      return ((a[sortKey] ?? 0) - (b[sortKey] ?? 0)) * dir;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const rows = sorted.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  function toggleSort(key) {
+    setPage(1);
+    if (sortKey === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); return; }
+    setSortKey(key);
+    setSortDir(key === "name" ? "asc" : "desc");
+  }
+
+  return (
+    <Panel>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 className="text-sm font-semibold">Leaderboard</h3>
+        <div className="relative">
+          <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
+          <TextInput placeholder="Search player" value={query}
+            onChange={e => { setQuery(e.target.value); setPage(1); }} className="pl-8 w-44" />
+        </div>
+      </div>
+
+      {ranked.length === 0 ? (
+        <div className={`text-sm ${t.subtext}`}>No matches recorded yet — stats build up as you play.</div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className={`text-left ${t.subtext}`}>
+                  {LEADERBOARD_COLUMNS.map(col => (
+                    <th key={col.key} className="pb-2 font-medium whitespace-nowrap">
+                      <button onClick={() => toggleSort(col.key)}
+                        className={`inline-flex items-center gap-0.5 hover:opacity-100 ${sortKey === col.key ? "opacity-100 font-semibold" : "opacity-70"}`}>
+                        {col.label}
+                        {sortKey === col.key && (sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(p => (
+                  <tr key={p.name} className={`border-t ${t.border} cursor-pointer ${t.hover}`} onClick={() => setDetail(p)}>
+                    <td className="py-2 pr-2">{MEDAL[p.rank] ? <span className="text-base">{MEDAL[p.rank]}</span> : <span className={t.subtext}>{p.rank}</span>}</td>
+                    <td className="py-2 pr-2 font-medium">{p.name}</td>
+                    <td className="py-2 pr-2">{p.winPct}%</td>
+                    <td className="py-2 pr-2">{p.wins}</td>
+                    <td className="py-2 pr-2">{p.losses}</td>
+                    <td className="py-2 pr-2">{p.matchesPlayed}</td>
+                    <td className="py-2 pr-2">{p.pointsScored}</td>
+                    <td className="py-2 pr-2">{p.pointDiff >= 0 ? `+${p.pointDiff}` : p.pointDiff}</td>
+                    <td className="py-2 pr-2">{p.currentWinStreak > 0 ? `W${p.currentWinStreak}` : p.currentLosingStreak > 0 ? `L${p.currentLosingStreak}` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-3 text-sm">
+              <span className={t.subtext}>Page {pageSafe} of {totalPages}</span>
+              <div className="flex gap-2">
+                <Btn variant="ghost" disabled={pageSafe <= 1} onClick={() => setPage(p => p - 1)}>Prev</Btn>
+                <Btn variant="ghost" disabled={pageSafe >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Btn>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {detail && <PlayerAnalyticsDialog p={detail} onClose={() => setDetail(null)} />}
+    </Panel>
+  );
+}
+
 function StatsPage() {
   const { state } = useStore();
   const t = useTheme();
-  const checkedIn = state.players.filter(p => p.status !== "not-checked-in");
-  const rows = [...checkedIn].sort((a, b) => b.gamesPlayed - a.gamesPlayed);
   const courtUsage = state.courts.map(c => ({
     court: c.name,
     count: state.history.filter(m => m.courtId === c.id).length,
@@ -1257,12 +1431,9 @@ function StatsPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      <Leaderboard />
       <Panel>
-        <h3 className="text-sm font-semibold mb-3">Player statistics</h3>
-        <StatsTable rows={rows} />
-      </Panel>
-      <Panel>
-        <h3 className="text-sm font-semibold mb-3">Court usage</h3>
+        <h3 className="text-sm font-semibold mb-3">Court usage this session</h3>
         <div className="flex flex-col gap-2">
           {courtUsage.map(c => {
             const max = Math.max(1, ...courtUsage.map(x => x.count));
@@ -1311,10 +1482,17 @@ function ArchivedSessionViewer({ session, onClose }) {
    SESSION / SETTINGS
 --------------------------------------------------------------------------- */
 function SettingsPage() {
-  const { state, dispatch, archive, askConfirm } = useStore();
+  const { state, dispatch, archive, archiveDispatch, askConfirm } = useStore();
   const t = useTheme();
   const [name, setName] = useState(state.sessionName);
   const [viewing, setViewing] = useState(null);
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [sessionSort, setSessionSort] = useState("newest");
+
+  const visibleSessions = archive
+    .filter(s => s.name.toLowerCase().includes(sessionQuery.toLowerCase()) ||
+      new Date(s.endedAt).toLocaleDateString().includes(sessionQuery))
+    .sort((a, b) => sessionSort === "newest" ? b.endedAt - a.endedAt : a.endedAt - b.endedAt);
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
@@ -1350,21 +1528,52 @@ function SettingsPage() {
       </Panel>
 
       <Panel className="flex flex-col gap-3">
-        <h3 className="text-sm font-semibold">Session history ({archive.length})</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">Session history ({archive.length})</h3>
+          {archive.length > 0 && (
+            <Btn variant="danger" onClick={() => askConfirm({
+              title: "Clear Session History",
+              message: "Are you sure you want to permanently delete all session history? This action cannot be undone.",
+              confirmLabel: "Delete All",
+              onConfirm: () => archiveDispatch({ type: "CLEAR_ALL" }),
+            })}><Trash2 size={14} /> Clear all session history</Btn>
+          )}
+        </div>
         {archive.length === 0 ? (
           <div className={`text-sm ${t.subtext}`}>Past sessions will show up here once you end one.</div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {archive.map(s => (
-              <div key={s.id} className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${t.panelSoft}`}>
-                <div>
-                  <div className="text-sm font-medium">{s.name}</div>
-                  <div className={`text-xs ${t.subtext}`}>{new Date(s.endedAt).toLocaleDateString()} · {s.playerCount} players · {s.courtCount} courts</div>
-                </div>
-                <Btn onClick={() => setViewing(s)}><Eye size={14} /> View</Btn>
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[10rem]">
+                <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
+                <TextInput placeholder="Search by name or date" value={sessionQuery}
+                  onChange={e => setSessionQuery(e.target.value)} className="pl-8 w-full" />
               </div>
-            ))}
-          </div>
+              <Btn onClick={() => setSessionSort(s => s === "newest" ? "oldest" : "newest")}>
+                {sessionSort === "newest" ? <ChevronDown size={14} /> : <ChevronUp size={14} />} {sessionSort === "newest" ? "Newest first" : "Oldest first"}
+              </Btn>
+            </div>
+            <div className="flex flex-col gap-2">
+              {visibleSessions.map(s => (
+                <div key={s.id} className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${t.panelSoft}`}>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{s.name}</div>
+                    <div className={`text-xs ${t.subtext}`}>{new Date(s.endedAt).toLocaleDateString()} · {s.playerCount} players · {s.courtCount} courts</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Btn onClick={() => setViewing(s)}><Eye size={14} /> View</Btn>
+                    <Btn variant="ghost" onClick={() => askConfirm({
+                      title: "Delete session",
+                      message: `Permanently delete "${s.name}"? This action cannot be undone.`,
+                      confirmLabel: "Delete",
+                      onConfirm: () => archiveDispatch({ type: "REMOVE", id: s.id }),
+                    })} title="Delete this session"><Trash2 size={14} /></Btn>
+                  </div>
+                </div>
+              ))}
+              {visibleSessions.length === 0 && <div className={`text-sm ${t.subtext}`}>No sessions match that search.</div>}
+            </div>
+          </>
         )}
       </Panel>
 

@@ -36,6 +36,17 @@ and the app installs as a home-screen PWA on desktop, tablet, and mobile.
   longest wait, with penalties for repeated teammates/opponents, skill
   imbalance, and back-to-back matches. Implemented as a standalone, unit-tested
   module (`src/scheduler.js`) with no dependency on React or app state.
+- **Cross-session analytics & leaderboard** — the Stats tab ranks every player
+  (by win %, wins, losses, point differential, and matches played) across
+  *every* session you've ever run, not just the current one. Top 3 get medal
+  badges, every column is sortable, and there's search + pagination. Click a
+  player for a detail dialog with 16 stats: total/points/streaks/sessions/
+  average wait between matches/per-court breakdown, and more. Also a
+  standalone, unit-tested module (`src/analytics.js`).
+- **Session history management** — search past sessions by name or date, sort
+  newest/oldest, delete an individual session, or clear all session history
+  at once (with a confirmation dialog) — without touching your saved player
+  database, courts, or app settings.
 - **Toasts, confirm dialogs, loading splash** — consistent, rounded, animated
   dialogs throughout, with keyboard (Esc) support and large touch targets.
 - **PWA** — installable to a phone/tablet home screen, works offline as a shell.
@@ -66,7 +77,9 @@ masters-besties-open-play/
     ├── index.css            Tailwind entry point
     ├── App.jsx               the app: state/reducer, UI components, dialogs
     ├── scheduler.js           pure matchmaking logic (framework-free)
-    └── scheduler.test.js      unit tests for scheduler.js (Node's test runner)
+    ├── scheduler.test.js      unit tests for scheduler.js
+    ├── analytics.js           pure cross-session stats engine (framework-free)
+    └── analytics.test.js      unit tests for analytics.js
 ```
 
 ---
@@ -98,11 +111,13 @@ Opens a local dev server (usually `http://localhost:5173`) with hot reload.
 npm test
 ```
 
-Runs `src/scheduler.test.js` against `src/scheduler.js` using Node's built-in
-test runner — no extra dependencies needed. The suite covers matchmaking
-across 1–12 simultaneous courts (the regression check for court assignment),
-insufficient-player edge cases, and fairness behavior (teammate/opponent
-avoidance, fewest-games priority).
+Runs `scheduler.test.js` and `analytics.test.js` against their respective
+pure-logic modules using Node's built-in test runner — no extra dependencies
+needed. Coverage includes matchmaking across 1–12 simultaneous courts (the
+regression check for court assignment), insufficient-player edge cases,
+fairness behavior (teammate/opponent avoidance, fewest-games priority), and
+the analytics engine (win/loss/point aggregation, no-score match handling,
+streak calculation, and cross-session aggregation by player name).
 
 ## Build instructions
 
