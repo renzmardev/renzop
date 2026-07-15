@@ -36,13 +36,19 @@ and the app installs as a home-screen PWA on desktop, tablet, and mobile.
   longest wait, with penalties for repeated teammates/opponents, skill
   imbalance, and back-to-back matches. Implemented as a standalone, unit-tested
   module (`src/scheduler.js`) with no dependency on React or app state.
-- **Cross-session analytics & leaderboard** — the Stats tab ranks every player
-  (by win %, wins, losses, point differential, and matches played) across
-  *every* session you've ever run, not just the current one. Top 3 get medal
-  badges, every column is sortable, and there's search + pagination. Click a
-  player for a detail dialog with 16 stats: total/points/streaks/sessions/
-  average wait between matches/per-court breakdown, and more. Also a
-  standalone, unit-tested module (`src/analytics.js`).
+- **Cross-session analytics & leaderboard** — the Stats tab has two scopes,
+  toggled at the top of the leaderboard:
+  - **This session** — only the currently active session. Always starts
+    completely empty on a new session (matches played, wins, points, streaks,
+    everything) since it reads only live session state, never the archive.
+  - **Lifetime** — aggregates every session you've ever run, matched by saved
+    player name, and never resets on its own.
+
+  Either scope ranks players by win %, wins, losses, point differential, and
+  matches played, with medal badges for the top 3, sortable columns, search,
+  and pagination. Click a player for a detail dialog with 16 stats: points/
+  streaks/sessions/average wait between matches/per-court breakdown, and more.
+  Both are backed by a standalone, unit-tested module (`src/analytics.js`).
 - **Session history management** — search past sessions by name or date, sort
   newest/oldest, delete an individual session, or clear all session history
   at once (with a confirmation dialog) — without touching your saved player

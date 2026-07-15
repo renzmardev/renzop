@@ -2,7 +2,9 @@
  * Analytics — pure, framework-free cross-session player statistics.
  * Given the live session state and the archived session list, returns
  * per-player aggregated stats (identity = saved player name, since
- * session-local ids are randomly generated per session).
+ * session-local ids are randomly generated per session). Pass an empty
+ * archive array to get session-only stats (used by the "This session"
+ * leaderboard view, which must reset cleanly on a new session).
  */
 
 function formatDuration(ms) {

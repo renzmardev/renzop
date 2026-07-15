@@ -1252,7 +1252,7 @@ function StatsTable({ rows }) {
   );
 }
 
-function PlayerAnalyticsDialog({ p, onClose }) {
+function PlayerAnalyticsDialog({ p, onClose, scope }) {
   const t = useTheme();
   const courtEntries = Object.entries(p.courtCounts).sort((a, b) => b[1] - a[1]);
   const Stat = ({ label, value }) => (
@@ -1263,6 +1263,9 @@ function PlayerAnalyticsDialog({ p, onClose }) {
   );
   return (
     <Modal title={p.name} icon={BarChart3} onClose={onClose} maxWidth="max-w-lg">
+      <div className={`text-xs -mt-3 mb-3 ${t.subtext}`}>
+        {scope === "lifetime" ? "Lifetime stats — every session on record" : "This session only"}
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         <Stat label="Matches played" value={p.matchesPlayed} />
         <Stat label="Wins" value={p.wins} />
@@ -1314,13 +1317,20 @@ const MEDAL = { 1: "🥇", 2: "🥈", 3: "🥉" };
 function Leaderboard() {
   const { state, archive } = useStore();
   const t = useTheme();
+  const [scope, setScope] = useState("session"); // "session" (resets each session) | "lifetime" (all sessions ever)
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("rank");
   const [sortDir, setSortDir] = useState("asc");
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState(null);
 
-  const analytics = useMemo(() => computePlayerAnalytics(state, archive), [state, archive]);
+  // "Session" scope looks only at the live session (state), never at
+  // archived sessions — so it always starts clean when a new session begins.
+  // "Lifetime" scope folds in every archived session too.
+  const analytics = useMemo(
+    () => computePlayerAnalytics(state, scope === "lifetime" ? archive : []),
+    [state, archive, scope]
+  );
 
   // Canonical rank order (the tiebreak chain from the spec) — independent
   // of whatever column the table is currently sorted/displayed by.
@@ -1360,11 +1370,28 @@ function Leaderboard() {
   return (
     <Panel>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <h3 className="text-sm font-semibold">Leaderboard</h3>
-        <div className="relative">
-          <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
-          <TextInput placeholder="Search player" value={query}
-            onChange={e => { setQuery(e.target.value); setPage(1); }} className="pl-8 w-44" />
+        <div>
+          <h3 className="text-sm font-semibold">Leaderboard</h3>
+          <p className={`text-xs mt-0.5 ${t.subtext}`}>
+            {scope === "session" ? "This session only — resets when you start a new session." : "All sessions ever run, aggregated by saved player name."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className={`inline-flex rounded-lg p-0.5 ${t.panelSoft}`}>
+            <button onClick={() => { setScope("session"); setPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${scope === "session" ? "bg-[#D9F14A] text-[#1F2B08]" : "opacity-60"}`}>
+              This session
+            </button>
+            <button onClick={() => { setScope("lifetime"); setPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${scope === "lifetime" ? "bg-[#D9F14A] text-[#1F2B08]" : "opacity-60"}`}>
+              Lifetime
+            </button>
+          </div>
+          <div className="relative">
+            <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
+            <TextInput placeholder="Search player" value={query}
+              onChange={e => { setQuery(e.target.value); setPage(1); }} className="pl-8 w-44" />
+          </div>
         </div>
       </div>
 
@@ -1416,7 +1443,7 @@ function Leaderboard() {
         </>
       )}
 
-      {detail && <PlayerAnalyticsDialog p={detail} onClose={() => setDetail(null)} />}
+      {detail && <PlayerAnalyticsDialog p={detail} onClose={() => setDetail(null)} scope={scope} />}
     </Panel>
   );
 }

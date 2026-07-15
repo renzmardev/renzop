@@ -112,6 +112,28 @@ describe("computePlayerAnalytics", () => {
       assert.equal(p.winPct, 0);
     }
   });
+
+  test("regression: session-scope stats (archive=[]) are completely empty right after a session reset, even though lifetime scope still has the history", () => {
+    const liveState = baseState();
+    liveState.history.push({
+      status: "completed", courtName: "Court 1", teamA: ["a", "b"], teamB: ["c", "d"],
+      scoreA: 11, scoreB: 5, winner: "A", startedAt: 0, endedAt: 60000,
+    });
+    const archiveAfterReset = [{
+      id: "s1", endedAt: Date.now(),
+      players: liveState.players,
+      matches: liveState.history,
+    }];
+    // RESET_SESSION clears players/history to [] — this is what the reducer produces.
+    const freshState = { players: [], history: [] };
+
+    const sessionScope = computePlayerAnalytics(freshState, []); // "This session" view
+    assert.deepEqual(sessionScope, [], "a freshly reset session must show zero players/stats");
+
+    const lifetimeScope = computePlayerAnalytics(freshState, archiveAfterReset); // "Lifetime" view
+    const alice = lifetimeScope.find(p => p.name === "Alice");
+    assert.equal(alice.wins, 1, "lifetime stats must still reflect the archived session");
+  });
 });
 
 describe("formatDuration", () => {
