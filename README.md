@@ -1,40 +1,128 @@
 # Masters/Besties Open Play
 
-A pickleball open-play match manager: fair 2v2 matchmaking, a persistent
-player database, manual match progression, court management with automatic
-redistribution, session history, and a full stats/queue view. Data is saved
-to your browser's local storage, and the app installs as a home-screen PWA.
+A pickleball open-play match manager: fair, algorithm-driven 2v2 matchmaking,
+a persistent player database, manual match progression with player-swap
+dialogs, court management with automatic redistribution, session history,
+and a full stats/queue view. Data is saved to your browser's local storage,
+and the app installs as a home-screen PWA on desktop, tablet, and mobile.
 
-### What's new in this version
-- **Player database** — every player you add is saved permanently; pull them
-  into future sessions from Players → "Add from saved" instead of retyping names.
-- **Check In All** — one tap to check in every registered player.
+---
+
+## Features
+
+- **Dashboard** — live counts of registered/checked-in/waiting players, active
+  matches, available courts, and the current round, plus a court-by-court view.
+- **Player database** — every player you add is saved permanently in the
+  browser; pull them into future sessions from Players → "Add from saved"
+  instead of retyping names. Export the whole saved list to a `.txt` file
+  (one name per line) any time.
+- **Check-in** — check players in individually or all at once.
 - **Manual match progression** — when a match ends, the next matchup is
-  proposed but won't start (or count toward the timer/stats) until you tap
+  *proposed* but won't start (or count toward the timer/stats) until you tap
   **Start match**.
-- **Court redistribution** — disabling or removing a court mid-match sends
-  those four players back to the queue and reshuffles proposed matches
-  across the remaining courts automatically.
-- **Session history** — every session you end is archived (Settings →
-  Session history) with a read-only view of its final matches and stats.
-- **Smarter scheduler** — priority order is now fewest games played, then
-  longest wait, with skill-balance and back-to-back-match penalties layered on.
-- **Toasts, confirm dialogs, loading splash** — for a more production feel.
+- **Manual player switching** — before a match starts, freely swap any player
+  between two scheduled matches, a court, or the waiting queue via the swap
+  dialog. Once a match is **In Progress**, editing is locked to swapping a
+  player with their direct opponent on the same court only (teammates never
+  change) — or reset the match entirely to unlock full editing again.
+- **Court management** — add, rename, enable/disable, or remove courts at any
+  time. Disabling or removing a court mid-match evicts its players back to the
+  queue and automatically redistributes proposed matches across the courts
+  that remain, no matter how many courts you're running.
+- **Session history** — every session you end is archived (Settings → Session
+  history) with a read-only view of its final matches and stats. New sessions
+  default their name to today's date and can be renamed anytime.
+- **Fair, tested scheduler** — priority order is fewest games played, then
+  longest wait, with penalties for repeated teammates/opponents, skill
+  imbalance, and back-to-back matches. Implemented as a standalone, unit-tested
+  module (`src/scheduler.js`) with no dependency on React or app state.
+- **Toasts, confirm dialogs, loading splash** — consistent, rounded, animated
+  dialogs throughout, with keyboard (Esc) support and large touch targets.
 - **PWA** — installable to a phone/tablet home screen, works offline as a shell.
 
-## Run it locally
+## Tech stack
+
+React 18 · Vite · Tailwind CSS · lucide-react icons · zero backend (all data
+lives in `localStorage`).
+
+---
+
+## Project structure
+
+```
+masters-besties-open-play/
+├── index.html              Vite entry HTML, PWA meta tags
+├── vite.config.js          Vite + base path config
+├── tailwind.config.js
+├── postcss.config.js
+├── package.json
+├── LICENSE                 MIT
+├── public/
+│   ├── manifest.json       PWA manifest
+│   ├── sw.js                offline-shell service worker
+│   ├── icon-192.png / icon-512.png / apple-touch-icon.png / favicon.png
+└── src/
+    ├── main.jsx             React entry point + service worker registration
+    ├── index.css            Tailwind entry point
+    ├── App.jsx               the app: state/reducer, UI components, dialogs
+    ├── scheduler.js           pure matchmaking logic (framework-free)
+    └── scheduler.test.js      unit tests for scheduler.js (Node's test runner)
+```
+
+---
+
+## Installation guide
+
+**Prerequisites:** [Node.js](https://nodejs.org) 18+ (includes npm) and
+[Git](https://git-scm.com).
 
 ```bash
+# from inside the unzipped project folder
 npm install
+```
+
+This installs React, Vite, Tailwind, and the other dependencies listed in
+`package.json`. No API keys, accounts, or backend setup required.
+
+## Development
+
+```bash
 npm run dev
 ```
 
-Then open the URL Vite prints (usually http://localhost:5173).
+Opens a local dev server (usually `http://localhost:5173`) with hot reload.
 
-## Publish to GitHub
+## Testing
 
-1. Create a new repo on GitHub (don't add a README there — you already have one).
-2. From this folder:
+```bash
+npm test
+```
+
+Runs `src/scheduler.test.js` against `src/scheduler.js` using Node's built-in
+test runner — no extra dependencies needed. The suite covers matchmaking
+across 1–12 simultaneous courts (the regression check for court assignment),
+insufficient-player edge cases, and fairness behavior (teammate/opponent
+avoidance, fewest-games priority).
+
+## Build instructions
+
+```bash
+npm run build
+```
+
+Produces an optimized static build in `dist/`. Preview it locally with:
+
+```bash
+npm run preview
+```
+
+---
+
+## Publishing to GitHub
+
+1. Create a new, empty repository on GitHub (skip adding a README there —
+   this project already has one).
+2. From the project folder:
 
 ```bash
 git init
@@ -45,40 +133,28 @@ git remote add origin https://github.com/<your-username>/masters-besties-open-pl
 git push -u origin main
 ```
 
-Replace `<your-username>` with your GitHub username, and the repo name if you
-picked a different one.
+Replace `<your-username>` (and the repo name, if you picked a different one).
 
-## Put it live on the web (GitHub Pages)
+## Deployment instructions
 
-This project is preconfigured for GitHub Pages.
+### Vercel or Netlify (recommended — zero config)
 
-1. Install the deploy tool (already in `devDependencies`, so `npm install` covers it).
-2. Build and publish:
+Import the GitHub repo in either dashboard. Both auto-detect Vite and build
+correctly out of the box. Leave `base: "/"` in `vite.config.js` for these.
 
-```bash
-npm run deploy
-```
+### GitHub Pages
 
-This pushes the built app to a `gh-pages` branch.
+1. `npm run deploy` (uses the `gh-pages` package, already in `devDependencies`)
+   — this builds the app and pushes `dist/` to a `gh-pages` branch.
+2. On GitHub: repo → **Settings** → **Pages** → set the source to the
+   `gh-pages` branch, `/ (root)`.
+3. Your app will be live at `https://<your-username>.github.io/masters-besties-open-play/`.
+4. If you rename the repo, update `base` in `vite.config.js` to
+   `"/<your-repo-name>/"` first.
 
-3. On GitHub, go to your repo → **Settings** → **Pages** → set the source to
-   the `gh-pages` branch, `/ (root)`.
-4. Your app will be live at `https://<your-username>.github.io/masters-besties-open-play/`.
+---
 
-If you rename the repo, update the `base` path in `vite.config.js` to match:
-`base: "/<your-repo-name>/"`.
+## License
 
-### Alternative: Vercel or Netlify
-
-Both auto-detect Vite. Just import the GitHub repo in either dashboard —
-no config needed (leave `base: "/"` in `vite.config.js` if you go this route
-instead of GitHub Pages).
-
-## Project structure
-
-```
-src/
-  App.jsx        the entire app: types, scheduler, store, and UI
-  main.jsx       React entry point
-  index.css      Tailwind entry point
-```
+MIT — see [LICENSE](./LICENSE). Free to use, modify, and deploy for your own
+open-play sessions.

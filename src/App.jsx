@@ -30,6 +30,10 @@ const FontLoader = () => (
     @keyframes op-spin { to { transform: rotate(360deg); } }
     .op-spin { animation: op-spin 0.8s linear infinite; }
     .op-card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    @keyframes op-modal-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes op-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+    .op-modal { animation: op-modal-in 0.2s cubic-bezier(0.16,1,0.3,1); }
+    .op-backdrop { animation: op-backdrop-in 0.15s ease-out; }
   `}</style>
 );
 
@@ -52,134 +56,8 @@ const persist = {
    Exposed: pairKey, partnerCount, opponentCount, calculateFairnessScore,
    buildTeams, getWaitingPlayers, generateMatches
 --------------------------------------------------------------------------- */
-const Scheduler = (() => {
-  const pairKey = (a, b) => [a, b].sort().join("|");
+import { Scheduler } from "./scheduler.js";
 
-  function partnerCount(aId, bId, history) {
-    let c = 0;
-    for (const m of history) {
-      if (m.status !== "completed" && m.status !== "no-score") continue;
-      if ((m.teamA.includes(aId) && m.teamA.includes(bId)) ||
-          (m.teamB.includes(aId) && m.teamB.includes(bId))) c++;
-    }
-    return c;
-  }
-
-  function opponentCount(aId, bId, history) {
-    let c = 0;
-    for (const m of history) {
-      if (m.status !== "completed" && m.status !== "no-score") continue;
-      const aInA = m.teamA.includes(aId), aInB = m.teamB.includes(aId);
-      const bInA = m.teamA.includes(bId), bInB = m.teamB.includes(bId);
-      if ((aInA && bInB) || (aInB && bInA)) c++;
-    }
-    return c;
-  }
-
-  // Sum of pairwise penalties for a proposed teamA/teamB grouping.
-  function calculateFairnessScore(teamA, teamB, ctx) {
-    const { history, round, avgGames, rankMap, queueLength } = ctx;
-    let score = 0;
-    score += 100 * partnerCount(teamA[0].id, teamA[1].id, history);
-    score += 100 * partnerCount(teamB[0].id, teamB[1].id, history);
-    for (const a of teamA) {
-      for (const b of teamB) {
-        score += 40 * opponentCount(a.id, b.id, history);
-      }
-    }
-    for (const p of [...teamA, ...teamB]) {
-      if (p.gamesPlayed > avgGames + 0.001) score += 20;
-      // Back-to-back avoidance: heavier penalty for playing the very last round.
-      if (p.lastPlayedRound != null && round - p.lastPlayedRound === 0) score += 35;
-      else if (p.lastPlayedRound != null && round - p.lastPlayedRound === 1) score += 15;
-      const rank = rankMap[p.id] ?? 0;
-      const total = Math.max(queueLength, 1);
-      score += -40 * (1 - rank / total);
-    }
-    // Skill balance: keep the two teams' average skill close to each other.
-    const skillOf = p => SKILL_VALUE[p.skill] ?? 2.5;
-    const teamASkill = (skillOf(teamA[0]) + skillOf(teamA[1])) / 2;
-    const teamBSkill = (skillOf(teamB[0]) + skillOf(teamB[1])) / 2;
-    score += Math.abs(teamASkill - teamBSkill) * 15;
-    return score;
-  }
-
-  // Given exactly 4 players, find the pairing (of the 3 possible) with the
-  // lowest total penalty.
-  function buildTeams(four, ctx) {
-    const pairings = [
-      [[four[0], four[1]], [four[2], four[3]]],
-      [[four[0], four[2]], [four[1], four[3]]],
-      [[four[0], four[3]], [four[1], four[2]]],
-    ];
-    let best = null;
-    for (const [teamA, teamB] of pairings) {
-      const score = calculateFairnessScore(teamA, teamB, ctx);
-      if (!best || score < best.score) best = { teamA, teamB, score };
-    }
-    return best;
-  }
-
-  // Priority order: (1) fewest games played, (2) longest waiting time.
-  function getWaitingPlayers(players) {
-    return players
-      .filter(p => p.status === "waiting" && !p.paused)
-      .sort((a, b) => {
-        if (a.gamesPlayed !== b.gamesPlayed) return a.gamesPlayed - b.gamesPlayed;
-        return (a.waitingSince ?? 0) - (b.waitingSince ?? 0);
-      });
-  }
-
-  const SKILL_VALUE = { Beginner: 1, Intermediate: 2, Advanced: 3, Open: 2.5 };
-
-  function* combinations(arr, k) {
-    const n = arr.length;
-    const idx = Array.from({ length: k }, (_, i) => i);
-    if (k > n) return;
-    while (true) {
-      yield idx.map(i => arr[i]);
-      let i = k - 1;
-      while (i >= 0 && idx[i] === i + n - k) i--;
-      if (i < 0) return;
-      idx[i]++;
-      for (let j = i + 1; j < k; j++) idx[j] = idx[j - 1] + 1;
-    }
-  }
-
-  // emptyCourts: Court[] needing assignment. waitingPool: Player[] already
-  // sorted by priority. Returns [{ court, teamA, teamB }]
-  function generateMatches(emptyCourts, waitingPool, players, history, round) {
-    const checkedIn = players.filter(p => p.status !== "not-checked-in");
-    const avgGames = checkedIn.length
-      ? checkedIn.reduce((s, p) => s + p.gamesPlayed, 0) / checkedIn.length
-      : 0;
-    const rankMap = {};
-    waitingPool.forEach((p, i) => { rankMap[p.id] = i; });
-
-    let pool = [...waitingPool];
-    const results = [];
-    for (const court of emptyCourts) {
-      if (pool.length < 4) break;
-      const candidatePoolSize = Math.min(pool.length, 10);
-      const candidates = pool.slice(0, candidatePoolSize);
-      let bestGroup = null;
-      for (const combo of combinations(candidates, 4)) {
-        const ctx = { history, round, avgGames, rankMap, queueLength: waitingPool.length };
-        const { teamA, teamB, score } = buildTeams(combo, ctx);
-        if (!bestGroup || score < bestGroup.score) bestGroup = { teamA, teamB, score, players: combo };
-      }
-      results.push({ court, teamA: bestGroup.teamA, teamB: bestGroup.teamB });
-      const usedIds = new Set(bestGroup.players.map(p => p.id));
-      pool = pool.filter(p => !usedIds.has(p.id));
-    }
-    return results;
-  }
-
-  return {
-    pairKey, partnerCount, opponentCount, calculateFairnessScore,
-    buildTeams, getWaitingPlayers, generateMatches,
-  };
-})();
 
 /* ---------------------------------------------------------------------------
    TYPES (documented via JSDoc since this runtime executes plain JS/JSX)
@@ -197,12 +75,19 @@ const Scheduler = (() => {
 const uid = () => Math.random().toString(36).slice(2, 10);
 const SKILLS = ["Beginner", "Intermediate", "Advanced", "Open"];
 
+function formatSessionDate(d = new Date()) {
+  const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${weekday}, ${mm}/${dd}/${d.getFullYear()}`;
+}
+
 function makeInitialCourts() {
   return [1, 2, 3, 4].map(n => ({ id: uid(), name: `Court ${n}`, enabled: true }));
 }
 
 const initialState = {
-  sessionName: "Friday open play",
+  sessionName: formatSessionDate(),
   players: [],
   courts: makeInitialCourts(),
   matches: [],
@@ -256,7 +141,7 @@ function reducer(state, action) {
       return { ...initialState, ...action.payload };
 
     case "RESET_SESSION":
-      return { ...initialState, courts: makeInitialCourts(), sessionName: action.name || "New session" };
+      return { ...initialState, courts: makeInitialCourts(), sessionName: action.name || formatSessionDate() };
 
     case "SET_SESSION_NAME":
       return { ...state, sessionName: action.name };
@@ -383,6 +268,78 @@ function reducer(state, action) {
       return evictMatch(state, action.id);
     }
 
+    case "RESET_MATCH": {
+      // Explicitly reopen an in-progress match for editing: same as cancel,
+      // but framed for the "unlock this court" use case.
+      return evictMatch(state, action.id);
+    }
+
+    case "SWAP_OPPONENTS": {
+      // Once a match is in progress, the only edit allowed is trading a
+      // player with their direct opponent on the SAME court — teammate
+      // pairs never change, and no outside/waiting player can enter.
+      const m = state.matches.find(x => x.id === action.matchId && x.status === "active");
+      if (!m) return state;
+      const { idA, idB } = action;
+      const aInA = m.teamA.includes(idA), aInB = m.teamB.includes(idA);
+      const bInA = m.teamA.includes(idB), bInB = m.teamB.includes(idB);
+      const validOpponentPair = (aInA && bInB) || (aInB && bInA);
+      if (!validOpponentPair) return state;
+      const teamA = m.teamA.map(id => id === idA ? idB : id === idB ? idA : id);
+      const teamB = m.teamB.map(id => id === idA ? idB : id === idB ? idA : id);
+      return { ...state, matches: state.matches.map(x => x.id === m.id ? { ...x, teamA, teamB } : x) };
+    }
+
+    case "SWAP_PLAYERS": {
+      const { idA, idB } = action;
+      if (!idA || !idB || idA === idB) return state;
+      const pA = state.players.find(p => p.id === idA);
+      const pB = state.players.find(p => p.id === idB);
+      if (!pA || !pB) return state;
+      // Only players who are waiting or in a not-yet-started (pending) match
+      // may be swapped. Anyone already playing is off-limits.
+      const swappable = p => p.status === "waiting" || p.status === "assigned";
+      if (!swappable(pA) || !swappable(pB)) return state;
+
+      const locate = (id) => {
+        if (pA.id === id && pA.status === "waiting") return { type: "waiting" };
+        if (pB.id === id && pB.status === "waiting") return { type: "waiting" };
+        const m = state.matches.find(x => (x.teamA.includes(id) || x.teamB.includes(id)) && x.status === "pending");
+        if (!m) return null;
+        const team = m.teamA.includes(id) ? "teamA" : "teamB";
+        return { type: "match", matchId: m.id, team };
+      };
+      const locA = locate(idA), locB = locate(idB);
+      if (!locA || !locB) return state; // defensive: found in an active match or nowhere
+
+      let matches = state.matches;
+      const swapIn = (matchId, team, oldId, newId) => {
+        matches = matches.map(m => m.id === matchId
+          ? { ...m, [team]: m[team].map(id => id === oldId ? newId : id) }
+          : m);
+      };
+
+      if (locA.type === "match") swapIn(locA.matchId, locA.team, idA, idB);
+      if (locB.type === "match") swapIn(locB.matchId, locB.team, idB, idA);
+
+      const now = Date.now();
+      const players = state.players.map(p => {
+        if (p.id === idA) {
+          if (locB.type === "waiting") return { ...p, status: "waiting", waitingSince: now, courtId: null };
+          const m = matches.find(x => x.id === locB.matchId);
+          return { ...p, status: "assigned", courtId: m.courtId };
+        }
+        if (p.id === idB) {
+          if (locA.type === "waiting") return { ...p, status: "waiting", waitingSince: now, courtId: null };
+          const m = matches.find(x => x.id === locA.matchId);
+          return { ...p, status: "assigned", courtId: m.courtId };
+        }
+        return p;
+      });
+
+      return { ...state, players, matches };
+    }
+
     case "FINISH_MATCH": {
       const m = state.matches.find(x => x.id === action.id);
       if (!m) return state;
@@ -390,6 +347,8 @@ function reducer(state, action) {
       let winner;
       if (action.mode === "score") {
         winner = action.scoreA > action.scoreB ? "A" : action.scoreB > action.scoreA ? "B" : undefined;
+      } else if (action.mode === "no-score") {
+        winner = action.winner === "A" || action.winner === "B" ? action.winner : undefined;
       }
       const finished = {
         ...m, status: action.mode === "score" ? "completed" : "no-score",
@@ -416,7 +375,12 @@ function reducer(state, action) {
       let remainingMatches = state.matches.filter(x => x.id !== action.id);
       let round = state.round;
       const stillActiveThisRound = remainingMatches.some(x => x.round === round && x.status === "active");
-      if (!stillActiveThisRound) round = round + 1;
+      if (!stillActiveThisRound) {
+        round = round + 1;
+        // Not-yet-started proposals should always reflect the round they'll
+        // actually be played in, not the round they were originally drafted in.
+        remainingMatches = remainingMatches.map(x => x.status === "pending" ? { ...x, round } : x);
+      }
 
       let history = [...state.history, finished];
 
@@ -426,11 +390,14 @@ function reducer(state, action) {
     }
 
     case "SHUFFLE_ROUND": {
-      // Cancel all pending/active matches (no stats) then re-propose.
-      const activeIds = new Set(state.matches.flatMap(m => [...m.teamA, ...m.teamB]));
-      const players = state.players.map(p => activeIds.has(p.id)
+      // Re-draw only the not-yet-started proposals; matches already in
+      // progress are left completely alone.
+      const pending = state.matches.filter(m => m.status === "pending");
+      const active = state.matches.filter(m => m.status === "active");
+      const releasedIds = new Set(pending.flatMap(m => [...m.teamA, ...m.teamB]));
+      const players = state.players.map(p => releasedIds.has(p.id)
         ? { ...p, status: "waiting", waitingSince: Date.now(), courtId: null } : p);
-      return fillEmptyCourts({ ...state, players, matches: [] });
+      return fillEmptyCourts({ ...state, players, matches: active });
     }
 
     default:
@@ -503,6 +470,9 @@ function StoreProvider({ children }) {
   const [archive, archiveDispatch] = useReducer(archiveReducer, []);
   const [ready, setReady] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [swapTarget, setSwapTarget] = useState(null); // playerId currently being reassigned
+  const [confirmDialog, setConfirmDialog] = useState(null); // {title,message,confirmLabel,tone,onConfirm}
+  const [endMatchTarget, setEndMatchTarget] = useState(null); // match currently being ended
   const loaded = useRef(false);
 
   function pushToast(message, tone = "info") {
@@ -511,6 +481,37 @@ function StoreProvider({ children }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3200);
   }
   function dismissToast(id) { setToasts(prev => prev.filter(t => t.id !== id)); }
+
+  function openSwap(id) {
+    const player = state.players.find(p => p.id === id);
+    if (!player || player.status === "not-checked-in") return;
+    setSwapTarget(id);
+  }
+  function closeSwap() { setSwapTarget(null); }
+
+  // Perform the swap chosen from the SwapPlayerDialog. Handles both the
+  // free-form (pending/waiting) case and the opponent-only (active) case.
+  function completeSwap(otherId) {
+    const a = state.players.find(p => p.id === swapTarget);
+    const b = state.players.find(p => p.id === otherId);
+    if (!a || !b) { setSwapTarget(null); return; }
+    if (a.status === "playing" && b.status === "playing") {
+      const m = state.matches.find(x => x.status === "active" &&
+        ((x.teamA.includes(a.id) && x.teamB.includes(b.id)) || (x.teamB.includes(a.id) && x.teamA.includes(b.id))));
+      if (m) { dispatch({ type: "SWAP_OPPONENTS", matchId: m.id, idA: a.id, idB: b.id }); pushToast("Opponents swapped", "success"); }
+    } else {
+      dispatch({ type: "SWAP_PLAYERS", idA: a.id, idB: b.id });
+      pushToast("Players swapped", "success");
+    }
+    setSwapTarget(null);
+  }
+
+  function askConfirm({ title, message, confirmLabel = "Confirm", tone = "danger", onConfirm }) {
+    setConfirmDialog({ title, message, confirmLabel, tone, onConfirm });
+  }
+
+  function openEndMatch(match) { setEndMatchTarget(match); }
+  function closeEndMatch() { setEndMatchTarget(null); }
 
   useEffect(() => {
     (async () => {
@@ -563,7 +564,12 @@ function StoreProvider({ children }) {
   }
 
   return (
-    <StoreCtx.Provider value={{ state, dispatch, db, dbDispatch, archive, archiveDispatch, ready, toasts, dismissToast }}>
+    <StoreCtx.Provider value={{
+      state, dispatch, db, dbDispatch, archive, archiveDispatch, ready, toasts, dismissToast,
+      swapTarget, openSwap, closeSwap, completeSwap,
+      confirmDialog, askConfirm, closeConfirm: () => setConfirmDialog(null),
+      endMatchTarget, openEndMatch, closeEndMatch,
+    }}>
       {children}
     </StoreCtx.Provider>
   );
@@ -725,12 +731,23 @@ function Dashboard() {
 /* ---------------------------------------------------------------------------
    COURT / MATCH CARD  — the signature visual: a literal court with a net
 --------------------------------------------------------------------------- */
-function TeamSlotColored({ ids, players, align }) {
+function TeamSlotColored({ ids, players, align, swappable, onPick }) {
   return (
     <div className={`flex flex-col gap-1 ${align === "right" ? "items-end text-right" : ""}`}>
-      {ids.map(id => (
-        <div key={id} className="truncate text-sm font-semibold" style={{ color: "#EFF7DE" }}>{playerName(players, id)}</div>
-      ))}
+      {ids.map(id => {
+        const name = playerName(players, id);
+        if (!swappable) {
+          return <div key={id} className="truncate text-sm font-semibold" style={{ color: "#EFF7DE" }}>{name}</div>;
+        }
+        return (
+          <button key={id} onClick={() => onPick(id)}
+            className={`truncate text-sm font-semibold flex items-center gap-1 rounded px-1 -mx-1 transition hover:bg-white/10 ${align === "right" ? "flex-row-reverse" : ""}`}
+            style={{ color: "#EFF7DE" }} title="Swap this player">
+            <ArrowRightLeft size={11} className="opacity-70 shrink-0" />
+            {name}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -749,7 +766,7 @@ function useElapsed(startedAt) {
 }
 
 function MatchCard({ match, court }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, openSwap, askConfirm, openEndMatch } = useStore();
   const t = useTheme();
   const [scoreOpen, setScoreOpen] = useState(false);
   const [scoreA, setScoreA] = useState("11");
@@ -776,11 +793,11 @@ function MatchCard({ match, court }) {
           <div className="relative rounded-xl overflow-hidden" style={{ background: t.dark ? "#0C2634" : "#123B52", opacity: isPending ? 0.85 : 1 }}>
             <div className="flex">
               <div className="flex-1 p-3 relative">
-                <TeamSlotColored ids={match.teamA} players={state.players} />
+                <TeamSlotColored ids={match.teamA} players={state.players} swappable={isPending || isActive} onPick={openSwap} />
               </div>
               <div className="w-[3px] shrink-0" style={{ background: YELLOW }} />
               <div className="flex-1 p-3">
-                <TeamSlotColored ids={match.teamB} players={state.players} align="right" />
+                <TeamSlotColored ids={match.teamB} players={state.players} align="right" swappable={isPending || isActive} onPick={openSwap} />
               </div>
             </div>
           </div>
@@ -801,7 +818,12 @@ function MatchCard({ match, court }) {
               <Btn variant="yellow" className="flex-1" onClick={() => setScoreOpen(true)}>
                 <Check size={15} /> Finish match
               </Btn>
-              <Btn variant="danger" onClick={() => dispatch({ type: "CANCEL_MATCH", id: match.id })} title="Cancel match">
+              <Btn variant="danger" onClick={() => askConfirm({
+                title: "Reset match",
+                message: "Players will return to the queue and no stats will be recorded. Do this to change who's playing.",
+                confirmLabel: "Reset match",
+                onConfirm: () => dispatch({ type: "RESET_MATCH", id: match.id }),
+              })} title="Reset match to change players">
                 <X size={15} />
               </Btn>
             </div>
@@ -819,7 +841,7 @@ function MatchCard({ match, court }) {
                 }}>Save score</Btn>
               </div>
               <div className="flex gap-2">
-                <Btn className="flex-1" onClick={() => { dispatch({ type: "FINISH_MATCH", id: match.id, mode: "no-score" }); setScoreOpen(false); }}>
+                <Btn className="flex-1" onClick={() => { openEndMatch(match); setScoreOpen(false); }}>
                   End without score
                 </Btn>
                 <Btn variant="ghost" onClick={() => setScoreOpen(false)}>Back</Btn>
@@ -855,29 +877,52 @@ function CourtGrid() {
 /* ---------------------------------------------------------------------------
    PLAYERS
 --------------------------------------------------------------------------- */
+function exportPlayersTxt(names) {
+  const blob = new Blob([names.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "open-play-players.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function PlayersPage() {
   const { state, dispatch, db } = useStore();
   const t = useTheme();
   const [query, setQuery] = useState("");
+  const [sortDir, setSortDir] = useState("asc");
   const [showAdd, setShowAdd] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [editing, setEditing] = useState(null);
 
-  const filtered = state.players.filter(p => p.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = state.players
+    .filter(p => p.name.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => sortDir === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
   const notCheckedIn = state.players.filter(p => p.status === "not-checked-in").length;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="relative">
-          <Search size={15} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
-          <TextInput placeholder="Search players" value={query} onChange={e => setQuery(e.target.value)} className="pl-8 w-56" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search size={15} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${t.subtext}`} />
+            <TextInput placeholder="Search players" value={query} onChange={e => setQuery(e.target.value)} className="pl-8 w-56" />
+          </div>
+          <Btn onClick={() => setSortDir(d => d === "asc" ? "desc" : "asc")} title="Toggle sort order">
+            {sortDir === "asc" ? <ChevronUp size={14} /> : <ChevronDown size={14} />} {sortDir === "asc" ? "A → Z" : "Z → A"}
+          </Btn>
         </div>
         <div className="flex flex-wrap gap-2">
           {notCheckedIn > 0 && <Btn onClick={() => dispatch({ type: "CHECK_IN_ALL" })}><CheckCheck size={15} /> Check in all</Btn>}
           <Btn onClick={() => setShowSaved(true)}><Database size={15} /> Add from saved</Btn>
           <Btn onClick={() => setShowBulk(true)}><Plus size={15} /> Bulk import</Btn>
+          <Btn onClick={() => exportPlayersTxt(db.map(p => p.name).sort((a, b) => a.localeCompare(b)))} title="Export every saved player to a .txt file">
+            <Save size={15} /> Export players
+          </Btn>
           <Btn variant="yellow" onClick={() => setShowAdd(true)}><Plus size={15} /> Add player</Btn>
         </div>
       </div>
@@ -896,7 +941,7 @@ function PlayersPage() {
 }
 
 function PlayerCard({ player: p, onEdit }) {
-  const { dispatch } = useStore();
+  const { dispatch, askConfirm } = useStore();
   const t = useTheme();
   const sc = statusColor[p.status] || statusColor["not-checked-in"];
   const label = p.status === "playing" ? "Playing" : p.status === "assigned" ? "Up next" : p.status === "waiting" ? "Waiting" : "Not checked in";
@@ -923,7 +968,12 @@ function PlayerCard({ player: p, onEdit }) {
           </Btn>
         )}
         <Btn variant="ghost" onClick={onEdit} title="Edit"><Pencil size={14} /></Btn>
-        <Btn variant="ghost" onClick={() => { if (confirm(`Remove ${p.name} from this session?`)) dispatch({ type: "REMOVE_PLAYER", id: p.id }); }} title="Remove"><Trash2 size={14} /></Btn>
+        <Btn variant="ghost" onClick={() => askConfirm({
+          title: "Remove player",
+          message: `Remove ${p.name} from this session? Their stats for this session will be lost.`,
+          confirmLabel: "Remove",
+          onConfirm: () => dispatch({ type: "REMOVE_PLAYER", id: p.id }),
+        })} title="Remove"><Trash2 size={14} /></Btn>
       </div>
     </Panel>
   );
@@ -1031,7 +1081,7 @@ function SavedPlayersPicker({ onClose }) {
    COURTS
 --------------------------------------------------------------------------- */
 function CourtsPage() {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, askConfirm } = useStore();
   const t = useTheme();
   const [name, setName] = useState("");
   const byCourtId = useMemo(() => {
@@ -1062,12 +1112,14 @@ function CourtsPage() {
                   <Btn variant={c.enabled ? "yellow" : "default"} onClick={() => dispatch({ type: "UPDATE_COURT", id: c.id, patch: { enabled: !c.enabled } })}>
                     {c.enabled ? "Enabled" : "Disabled"}
                   </Btn>
-                  <Btn variant="ghost" onClick={() => {
-                    const msg = m
+                  <Btn variant="ghost" onClick={() => askConfirm({
+                    title: "Remove court",
+                    message: m
                       ? `Remove ${c.name}? Its match will be cancelled and those players sent back to the queue.`
-                      : `Remove ${c.name}?`;
-                    if (confirm(msg)) dispatch({ type: "REMOVE_COURT", id: c.id });
-                  }}><Trash2 size={14} /></Btn>
+                      : `Remove ${c.name}?`,
+                    confirmLabel: "Remove",
+                    onConfirm: () => dispatch({ type: "REMOVE_COURT", id: c.id }),
+                  })}><Trash2 size={14} /></Btn>
                 </div>
               </div>
               {m && <div className={`text-xs ${t.subtext}`}>{m.status === "active" ? "Match in progress" : "Match proposed"} — will redistribute if disabled</div>}
@@ -1083,7 +1135,7 @@ function CourtsPage() {
    QUEUE
 --------------------------------------------------------------------------- */
 function QueuePage() {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, openSwap } = useStore();
   const t = useTheme();
   const waiting = state.players.filter(p => p.status === "waiting").sort((a, b) => {
     if (!!a.paused !== !!b.paused) return a.paused ? 1 : -1;
@@ -1104,6 +1156,7 @@ function QueuePage() {
             <div className={`text-xs ${t.subtext}`}>GP {p.gamesPlayed} · waiting {formatWait(p.waitingSince)}</div>
           </div>
           <div className="flex items-center gap-1">
+            <Btn variant="ghost" onClick={() => openSwap(p.id)} title="Swap into a match"><ArrowRightLeft size={14} /></Btn>
             <Btn variant="ghost" onClick={() => dispatch({ type: "MOVE_QUEUE", id: p.id, dir: "up" })}><ChevronUp size={14} /></Btn>
             <Btn variant="ghost" onClick={() => dispatch({ type: "MOVE_QUEUE", id: p.id, dir: "down" })}><ChevronDown size={14} /></Btn>
             <Btn variant="ghost" onClick={() => dispatch({ type: "PAUSE_PLAYER", id: p.id })} title={p.paused ? "Resume" : "Pause"}>
@@ -1236,27 +1289,21 @@ function ArchivedSessionViewer({ session, onClose }) {
   const t = useTheme();
   const rows = [...session.players].sort((a, b) => b.gamesPlayed - a.gamesPlayed);
   return (
-    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/50 p-4 overflow-y-auto" onClick={onClose}>
-      <div className={`w-full max-w-2xl rounded-2xl ${t.panel} p-5 my-8`} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <div className="font-semibold">{session.name}</div>
-            <div className={`text-xs ${t.subtext}`}>{new Date(session.endedAt).toLocaleString()} · {session.playerCount} players · {session.courtCount} courts</div>
-          </div>
-          <Btn variant="ghost" onClick={onClose}><X size={16} /></Btn>
+    <Modal title={session.name} icon={Eye} onClose={onClose} maxWidth="max-w-2xl">
+      <div className={`text-xs ${t.subtext} -mt-3 mb-4`}>
+        {new Date(session.endedAt).toLocaleString()} · {session.playerCount} players · {session.courtCount} courts
+      </div>
+      <div className="flex flex-col gap-4 max-h-[65vh] overflow-y-auto">
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Final player statistics</h4>
+          <StatsTable rows={rows} />
         </div>
-        <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
-          <div>
-            <h4 className="text-sm font-semibold mb-2">Final player statistics</h4>
-            <StatsTable rows={rows} />
-          </div>
-          <div>
-            <h4 className="text-sm font-semibold mb-2">Match history</h4>
-            <MatchHistoryRows matches={session.matches} players={session.players} />
-          </div>
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Match history</h4>
+          <MatchHistoryRows matches={session.matches} players={session.players} />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1264,7 +1311,7 @@ function ArchivedSessionViewer({ session, onClose }) {
    SESSION / SETTINGS
 --------------------------------------------------------------------------- */
 function SettingsPage() {
-  const { state, dispatch, archive } = useStore();
+  const { state, dispatch, archive, askConfirm } = useStore();
   const t = useTheme();
   const [name, setName] = useState(state.sessionName);
   const [viewing, setViewing] = useState(null);
@@ -1280,17 +1327,23 @@ function SettingsPage() {
           </div>
         </Field>
         <div className={`text-xs ${t.subtext}`}>Saved automatically to this browser as you go, so a refresh won't lose your session.</div>
-        <Btn variant="danger" className="w-fit" onClick={() => {
-          if (confirm("End this session and start a new one? The current session will be saved to Session history first.")) {
-            dispatch({ type: "RESET_SESSION", name: "New session" });
-          }
-        }}><FolderOpen size={14} /> End session & start new</Btn>
+        <Btn variant="danger" className="w-fit" onClick={() => askConfirm({
+          title: "End session",
+          message: "End this session and start a new one? The current session will be saved to Session history first.",
+          confirmLabel: "End session",
+          onConfirm: () => dispatch({ type: "RESET_SESSION" }),
+        })}><FolderOpen size={14} /> End session & start new</Btn>
       </Panel>
 
       <Panel className="flex flex-col gap-3">
         <h3 className="text-sm font-semibold">Round control</h3>
         <div className="flex items-center gap-2">
-          <Btn variant="danger" onClick={() => { if (confirm("Shuffle the current round? Matches not yet started will be re-drawn.")) dispatch({ type: "SHUFFLE_ROUND" }); }}>
+          <Btn variant="danger" onClick={() => askConfirm({
+            title: "Shuffle current round",
+            message: "Matches not yet started will be re-drawn. Matches already in progress are left alone.",
+            confirmLabel: "Shuffle",
+            onConfirm: () => dispatch({ type: "SHUFFLE_ROUND" }),
+          })}>
             <Shuffle size={14} /> Shuffle current round
           </Btn>
         </div>
@@ -1329,6 +1382,147 @@ function SettingsPage() {
 
       {viewing && <ArchivedSessionViewer session={viewing} onClose={() => setViewing(null)} />}
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   MODAL SYSTEM — one consistent look for every dialog in the app: rounded
+   corners, a bottom-sheet on mobile / centered card on desktop, backdrop
+   fade, Escape-to-close, and large touch-friendly buttons.
+--------------------------------------------------------------------------- */
+function Modal({ title, icon: Icon, onClose, children, maxWidth = "max-w-md" }) {
+  const t = useTheme();
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="op-backdrop fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 sm:p-4"
+      onClick={onClose} role="presentation">
+      <div className={`op-modal w-full ${maxWidth} rounded-t-3xl sm:rounded-2xl ${t.panel} p-5 sm:p-6 max-h-[88vh] overflow-y-auto shadow-2xl`}
+        onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="flex items-center justify-between mb-4 gap-3">
+          <div className="flex items-center gap-2 font-semibold text-base">
+            {Icon && <Icon size={18} />} {title}
+          </div>
+          <Btn variant="ghost" onClick={onClose} title="Close" className="!min-h-0 !p-2"><X size={16} /></Btn>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDialogHost() {
+  const { confirmDialog, closeConfirm } = useStore();
+  if (!confirmDialog) return null;
+  const { title, message, confirmLabel, tone, onConfirm } = confirmDialog;
+  return (
+    <Modal title={title} icon={ShieldAlert} onClose={closeConfirm} maxWidth="max-w-sm">
+      <p className="text-sm opacity-80 mb-5 leading-relaxed">{message}</p>
+      <div className="flex gap-2">
+        <Btn variant={tone === "danger" ? "danger" : "yellow"} className="flex-1" onClick={() => { onConfirm(); closeConfirm(); }}>
+          {confirmLabel}
+        </Btn>
+        <Btn variant="ghost" className="flex-1" onClick={closeConfirm}>Cancel</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function SwapPlayerDialogHost() {
+  const { state, swapTarget, closeSwap, completeSwap } = useStore();
+  const t = useTheme();
+  if (!swapTarget) return null;
+  const player = state.players.find(p => p.id === swapTarget);
+  if (!player) return null;
+
+  const isActive = player.status === "playing";
+  let candidates = [];
+  if (isActive) {
+    const m = state.matches.find(x => x.status === "active" && (x.teamA.includes(player.id) || x.teamB.includes(player.id)));
+    const opponentIds = m ? (m.teamA.includes(player.id) ? m.teamB : m.teamA) : [];
+    candidates = state.players.filter(p => opponentIds.includes(p.id))
+      .map(p => ({ player: p, label: `Opponent on ${m.courtName}` }));
+  } else {
+    candidates = state.players
+      .filter(p => p.id !== player.id && (p.status === "waiting" || p.status === "assigned"))
+      .map(p => {
+        if (p.status === "waiting") return { player: p, label: "Waiting queue" };
+        const m = state.matches.find(x => x.status === "pending" && (x.teamA.includes(p.id) || x.teamB.includes(p.id)));
+        return { player: p, label: m ? `Up next · ${m.courtName}` : "Scheduled" };
+      });
+  }
+
+  return (
+    <Modal title={`Swap out ${player.name}`} icon={ArrowRightLeft} onClose={closeSwap}>
+      {isActive && (
+        <div className={`text-xs mb-3 rounded-lg px-3 py-2 ${t.panelSoft}`}>
+          This match is in progress — you can only trade {player.name} with their current opponent, so teammates stay locked in.
+        </div>
+      )}
+      {candidates.length === 0 ? (
+        <div className={`text-sm ${t.subtext}`}>No eligible players to swap with right now.</div>
+      ) : (
+        <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+          {candidates.map(({ player: c, label }) => (
+            <button key={c.id} onClick={() => completeSwap(c.id)}
+              className={`flex items-center justify-between gap-2 rounded-xl px-3 py-3 text-left transition ${t.panelSoft} ${t.hover}`}>
+              <div>
+                <div className="font-medium text-sm">{c.name}</div>
+                <div className={`text-xs ${t.subtext}`}>{label}</div>
+              </div>
+              <ArrowRightLeft size={15} className="opacity-50 shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+      <Btn variant="ghost" className="w-full mt-3" onClick={closeSwap}>Cancel</Btn>
+    </Modal>
+  );
+}
+
+function EndMatchDialogHost() {
+  const { state, dispatch, endMatchTarget, closeEndMatch } = useStore();
+  const [choice, setChoice] = useState("skip");
+  useEffect(() => { setChoice("skip"); }, [endMatchTarget]);
+  if (!endMatchTarget) return null;
+  const m = endMatchTarget;
+  const teamAName = m.teamA.map(id => playerName(state.players, id)).join(" & ");
+  const teamBName = m.teamB.map(id => playerName(state.players, id)).join(" & ");
+
+  function confirm() {
+    dispatch({ type: "FINISH_MATCH", id: m.id, mode: "no-score", winner: choice === "skip" ? undefined : choice });
+    closeEndMatch();
+  }
+
+  return (
+    <Modal title="End match" icon={Check} onClose={closeEndMatch} maxWidth="max-w-sm">
+      <p className="text-sm opacity-80 mb-4 leading-relaxed">
+        Would you like to record which team won this match? This is optional and helps maintain player win statistics.
+      </p>
+      <div className="flex flex-col gap-2 mb-2">
+        <ThemedRadioOption checked={choice === "A"} onSelect={() => setChoice("A")} label={`Team A won — ${teamAName}`} />
+        <ThemedRadioOption checked={choice === "B"} onSelect={() => setChoice("B")} label={`Team B won — ${teamBName}`} />
+        <ThemedRadioOption checked={choice === "skip"} onSelect={() => setChoice("skip")} label="Skip — don't record a winner" />
+      </div>
+      <div className="flex gap-2 mt-4">
+        <Btn variant="yellow" className="flex-1" onClick={confirm}>Confirm</Btn>
+        <Btn variant="ghost" className="flex-1" onClick={closeEndMatch}>Cancel</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function ThemedRadioOption({ checked, onSelect, label }) {
+  const t = useTheme();
+  return (
+    <label onClick={onSelect}
+      className={`flex items-center gap-3 rounded-xl px-3 py-3 cursor-pointer transition ${t.panelSoft} ${checked ? "ring-2 ring-[#D9F14A]" : ""}`}>
+      <input type="radio" readOnly checked={checked} className="h-4 w-4 accent-[#D9F14A]" />
+      <span className="text-sm font-medium">{label}</span>
+    </label>
   );
 }
 
@@ -1396,6 +1590,9 @@ function AppShell() {
     <div className={`op-root min-h-screen w-full ${t.page} transition-colors`}>
       <FontLoader />
       <ToastHost />
+      <ConfirmDialogHost />
+      <SwapPlayerDialogHost />
+      <EndMatchDialogHost />
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5">
         <header className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
